@@ -1,0 +1,8 @@
+.env
+*.env
+!.env.example
+gcal-service-key.json
+**/gcal-service-key.json
+bin/
+.vercel/
+dist/
