@@ -17,6 +17,22 @@ import (
 // ErrNotFound is returned by DeleteEvent when Google reports the event is gone.
 var ErrNotFound = errors.New("event not found")
 
+const (
+	pageSize         = 100
+	maxPages         = 10
+	defaultListLimit = 5
+	// MaxListLimit caps the largest limit a caller may request with listEvents.
+	MaxListLimit = 500
+)
+
+// ReminderSetting mirrors a single Google reminder override: method is
+// "email", "popup" or "notification"; minutes is how many minutes before the
+// event it fires (0 = at event time).
+type ReminderSetting struct {
+	Method  string
+	Minutes int
+}
+
 // EventItem is a flattened, API-friendly description of a calendar event,
 // mirroring the fields the gcal CLI exposes for list/delete.
 type EventItem struct {
@@ -28,6 +44,7 @@ type EventItem struct {
 	Critical          bool
 	Recurring         bool
 	RecurrenceDisplay string
+	Reminders         []ReminderSetting
 }
 
 // ListOptions mirrors gcal list flags: a limit, "show only MASTER recurring",
@@ -43,82 +60,174 @@ type ListOptions struct {
 // ListEvents replicates `gcal list`:
 //
 //   - default: upcoming instances (timeMin=now, singleEvents=true,
-//     orderBy=startTime, maxResults=100) with recurring series deduped to
-//     their first upcoming occurrence so each series appears once;
+//     orderBy=startTime) with recurring series deduped to their first
+//     upcoming occurrence so each series appears once, then each kept
+//     occurrence is enriched from its MASTER event so priority, recurrence
+//     label and reminders reflect the whole series (Google omits these on
+//     expanded instances);
 //   - RecurringOnly: master events only (singleEvents=false), each series
 //     shown once, past included.
 //
-// Priority filters and limit mirror the CLI's filter_events.
-func (s *Service) ListEvents(ctx context.Context, opts ListOptions) ([]EventItem, error) {
-	var raw []*calendar.Event
-	var err error
+// It returns the events plus hasMore, reporting whether more events exist
+// beyond those returned. To honour large limits the underlying Google pages
+// are fetched until `limit` distinct (deduped+filtered) items are available
+// or the result set is exhausted (up to maxPages pages).
+func (s *Service) ListEvents(ctx context.Context, opts ListOptions) ([]EventItem, bool, error) {
 	if opts.RecurringOnly {
-		raw, err = s.fetchMasters(ctx)
-	} else {
-		raw, err = s.fetchUpcoming(ctx)
+		return s.listMasters(ctx, opts)
 	}
-	if err != nil {
-		return nil, err
+	return s.listUpcoming(ctx, opts)
+}
+
+func (s *Service) listUpcoming(ctx context.Context, opts ListOptions) ([]EventItem, bool, error) {
+	limit := opts.Limit
+	if limit < 0 {
+		limit = defaultListLimit
 	}
+
+	var raw []*calendar.Event
+	var masters map[string]*calendar.Event
+	now := time.Now().In(timeparse.NepalTZ).Format(time.RFC3339)
+	next := ""
+	count := 0
+	for page := 0; page < maxPages; page++ {
+		req := s.Svc.Events.List(s.CalendarID).
+			TimeMin(now).
+			MaxResults(pageSize).
+			SingleEvents(true).
+			OrderBy("startTime").
+			Context(ctx)
+		if next != "" {
+			req.PageToken(next)
+		}
+		resp, err := req.Do()
+		if err != nil {
+			return nil, false, fmt.Errorf("fetch events: %w", err)
+		}
+		raw = append(raw, resp.Items...)
+		next = resp.NextPageToken
+		if limit == 0 {
+			return []EventItem{}, next != "" || len(raw) > 0, nil
+		}
+		if len(raw) > 0 {
+			count = s.previewCount(ctx, raw, opts, &masters)
+		}
+		if next == "" || count >= limit {
+			break
+		}
+	}
+
+	// has_more only when the requested limit was actually filled, so the
+	// "load more" affordance disappears once everything distinct is shown
+	// (deduping collapses infinite recurring instances into one series).
+	hasMore := next != "" && count >= limit
 
 	events := make([]EventItem, 0, len(raw))
 	for _, e := range raw {
 		events = append(events, eventFromCalendar(e))
 	}
-
-	// Recurring series are deduped before filtering/limit so "recurring shown
-	// once" holds and a limit counts distinct events.
-	if !opts.RecurringOnly {
-		events = dedupeRecurring(events)
+	events = dedupeRecurring(events)
+	if masters != nil {
+		enrichRecurring(events, masters)
 	}
 	events = filterItems(events, opts)
-
-	limit := opts.Limit
-	if limit < 0 {
-		limit = len(events)
-		if !opts.RecurringOnly {
-			limit = 5
-		}
-	}
 	if limit > 0 && limit < len(events) {
 		events = events[:limit]
 	}
-
-	return events, nil
+	return events, hasMore, nil
 }
 
-// fetchUpcoming expands recurring events into upcoming instances.
-func (s *Service) fetchUpcoming(ctx context.Context) ([]*calendar.Event, error) {
-	now := time.Now().In(timeparse.NepalTZ).Format(time.RFC3339)
-	resp, err := s.Svc.Events.List(s.CalendarID).
-		TimeMin(now).
-		MaxResults(100).
-		SingleEvents(true).
-		OrderBy("startTime").
-		Context(ctx).
-		Do()
-	if err != nil {
-		return nil, fmt.Errorf("fetch events: %w", err)
+func (s *Service) listMasters(ctx context.Context, opts ListOptions) ([]EventItem, bool, error) {
+	limit := opts.Limit // <0 = every recurring series (CLI -A)
+	next := ""
+	var items []EventItem
+	for page := 0; page < maxPages; page++ {
+		req := s.Svc.Events.List(s.CalendarID).
+			MaxResults(pageSize).
+			SingleEvents(false).
+			OrderBy("updated").
+			Context(ctx)
+		if next != "" {
+			req.PageToken(next)
+		}
+		resp, err := req.Do()
+		if err != nil {
+			return nil, false, fmt.Errorf("fetch master recurring events: %w", err)
+		}
+		next = resp.NextPageToken
+		for _, e := range resp.Items {
+			if len(e.Recurrence) > 0 {
+				items = append(items, eventFromCalendar(e))
+			}
+		}
+		if limit == 0 {
+			return []EventItem{}, next != "" || len(items) > 0, nil
+		}
+		if next == "" || (limit > 0 && len(items) >= limit) {
+			break
+		}
 	}
-	return resp.Items, nil
+	// has_more only when masters fill the requested limit (default = all).
+	hasMore := next != "" && limit > 0 && len(items) >= limit
+	items = filterItems(items, opts)
+	if limit > 0 && limit < len(items) {
+		items = items[:limit]
+	}
+	return items, hasMore, nil
 }
 
-// fetchMasters returns MASTER events (singleEvents=false), keeping only the
-// ones with a recurrence rule — exactly like gcal's fetch_master_recurring_events.
-func (s *Service) fetchMasters(ctx context.Context) ([]*calendar.Event, error) {
-	resp, err := s.Svc.Events.List(s.CalendarID).
-		MaxResults(100).
-		SingleEvents(false).
-		OrderBy("updated").
-		Context(ctx).
-		Do()
-	if err != nil {
-		return nil, fmt.Errorf("fetch master recurring events: %w", err)
+// previewCount converts, dedupes and filters the raw instances gathered so
+// far (enriching from masters when any are recurring) and returns how many
+// distinct events would be returned. Used to stop paging once a limit is met.
+func (s *Service) previewCount(ctx context.Context, raw []*calendar.Event, opts ListOptions, masters *map[string]*calendar.Event) int {
+	if hasRecurringItem(raw) {
+		s.ensureMasters(ctx, masters)
 	}
-	out := make([]*calendar.Event, 0, len(resp.Items))
-	for _, e := range resp.Items {
-		if len(e.Recurrence) > 0 {
-			out = append(out, e)
+	events := make([]EventItem, 0, len(raw))
+	for _, e := range raw {
+		events = append(events, eventFromCalendar(e))
+	}
+	events = dedupeRecurring(events)
+	if *masters != nil {
+		enrichRecurring(events, *masters)
+	}
+	return len(filterItems(events, opts))
+}
+
+// ensureMasters lazily loads every recurring MASTER event into *m, degrading
+// to nil on error so listing still works without enrichment.
+func (s *Service) ensureMasters(ctx context.Context, m *map[string]*calendar.Event) {
+	if *m != nil {
+		return
+	}
+	*m, _ = s.fetchMastersMap(ctx)
+}
+
+// fetchMastersMap returns every recurring master keyed by id.
+func (s *Service) fetchMastersMap(ctx context.Context) (map[string]*calendar.Event, error) {
+	out := map[string]*calendar.Event{}
+	next := ""
+	for page := 0; page < maxPages; page++ {
+		req := s.Svc.Events.List(s.CalendarID).
+			MaxResults(pageSize).
+			SingleEvents(false).
+			OrderBy("updated").
+			Context(ctx)
+		if next != "" {
+			req.PageToken(next)
+		}
+		resp, err := req.Do()
+		if err != nil {
+			return nil, fmt.Errorf("fetch master recurring events: %w", err)
+		}
+		for _, e := range resp.Items {
+			if len(e.Recurrence) > 0 {
+				out[e.Id] = e
+			}
+		}
+		next = resp.NextPageToken
+		if next == "" {
+			break
 		}
 	}
 	return out, nil
@@ -168,6 +277,7 @@ func eventFromCalendar(e *calendar.Event) EventItem {
 		Summary:   e.Summary,
 		Critical:  isCritical(e),
 		Recurring: isRecurring(e),
+		Reminders: remindersFrom(e),
 	}
 	if item.Summary == "" {
 		item.Summary = "No title"
@@ -180,6 +290,51 @@ func eventFromCalendar(e *calendar.Event) EventItem {
 		item.RecurrenceDisplay = ParseRecurrenceDisplay(e.Recurrence)
 	}
 	return item
+}
+
+// remindersFrom flattens an event's reminder overrides; nil when none are set.
+func remindersFrom(e *calendar.Event) []ReminderSetting {
+	if e.Reminders == nil || len(e.Reminders.Overrides) == 0 {
+		return nil
+	}
+	out := make([]ReminderSetting, 0, len(e.Reminders.Overrides))
+	for _, o := range e.Reminders.Overrides {
+		if o == nil {
+			continue
+		}
+		out = append(out, ReminderSetting{Method: o.Method, Minutes: int(o.Minutes)})
+	}
+	return out
+}
+
+// hasRecurringItem reports whether any raw event is part of a recurring series.
+func hasRecurringItem(raw []*calendar.Event) bool {
+	for _, e := range raw {
+		if isRecurring(e) {
+			return true
+		}
+	}
+	return false
+}
+
+// enrichRecurring overwrites an instance's priority, recurrence label and
+// reminders from its MASTER event — Google returns neither on expanded
+// instances, which would otherwise mislabel recurring critical series.
+func enrichRecurring(events []EventItem, masters map[string]*calendar.Event) {
+	for i := range events {
+		if !events[i].Recurring {
+			continue
+		}
+		m, ok := masters[events[i].MasterID]
+		if !ok {
+			continue
+		}
+		events[i].Critical = isCritical(m)
+		events[i].Reminders = remindersFrom(m)
+		if len(m.Recurrence) > 0 {
+			events[i].RecurrenceDisplay = ParseRecurrenceDisplay(m.Recurrence)
+		}
+	}
 }
 
 func isCritical(e *calendar.Event) bool {
@@ -266,6 +421,56 @@ func (s *Service) DeleteEvent(ctx context.Context, id string) error {
 	return nil
 }
 
+// ReminderPatch describes the new reminder config for an event. UseDefault
+// restores the calendar default (clears overrides); otherwise Reminders are
+// applied verbatim.
+type ReminderPatch struct {
+	UseDefault bool
+	Reminders  []ReminderSetting
+}
+
+// EditReminders replaces an event's reminder config. Id may be an instance id
+// (a single occurrence) or a master id (the whole series, which cascades to
+// every instance). A GET-then-UPDATE is used because Google's PATCH only
+// merges nested fields, so the old overrides would survive alongside the new.
+func (s *Service) EditReminders(ctx context.Context, id string, patch ReminderPatch) error {
+	ev, err := s.Svc.Events.Get(s.CalendarID, id).Context(ctx).Do()
+	if err != nil {
+		var gerr *googleapi.Error
+		if errors.As(err, &gerr) && (gerr.Code == 404 || gerr.Code == 410) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("get calendar event for edit: %w", err)
+	}
+	if patch.UseDefault {
+		ev.Reminders = &calendar.EventReminders{UseDefault: true}
+	} else {
+		// Google's API treats a missing useDefault as true, so the false must
+		// be force-serialized whenever overrides are supplied.
+		ev.Reminders = &calendar.EventReminders{
+			UseDefault:      false,
+			ForceSendFields: []string{"UseDefault"},
+		}
+		for _, r := range patch.Reminders {
+			// minutes:0 must be serialized even though the generated field is
+			// omitempty, or Google rejects the override as missing minutes.
+			ev.Reminders.Overrides = append(ev.Reminders.Overrides, &calendar.EventReminder{
+				Method:          r.Method,
+				Minutes:         int64(r.Minutes),
+				ForceSendFields: []string{"Minutes"},
+			})
+		}
+	}
+	if _, err := s.Svc.Events.Update(s.CalendarID, id, ev).Context(ctx).Do(); err != nil {
+		var gerr *googleapi.Error
+		if errors.As(err, &gerr) && (gerr.Code == 404 || gerr.Code == 410) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("edit calendar event reminders: %w", err)
+	}
+	return nil
+}
+
 // BulkDeleteItem reports one deleted event for the bulk endpoints.
 type BulkDeleteItem struct {
 	Summary string
@@ -277,7 +482,7 @@ type BulkDeleteItem struct {
 // BulkDeleteRecurring mirrors `gcal delete -A`: deletes every master
 // recurring series.
 func (s *Service) BulkDeleteRecurring(ctx context.Context) ([]BulkDeleteItem, error) {
-	masters, err := s.fetchMasters(ctx)
+	masters, err := s.fetchMastersMap(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -288,11 +493,39 @@ func (s *Service) BulkDeleteRecurring(ctx context.Context) ([]BulkDeleteItem, er
 	return s.bulkDelete(ctx, targets), nil
 }
 
+// fetchUpcomingAll gathers upcoming instances across pages (up to maxPages).
+func (s *Service) fetchUpcomingAll(ctx context.Context) ([]*calendar.Event, error) {
+	var out []*calendar.Event
+	now := time.Now().In(timeparse.NepalTZ).Format(time.RFC3339)
+	next := ""
+	for page := 0; page < maxPages; page++ {
+		req := s.Svc.Events.List(s.CalendarID).
+			TimeMin(now).
+			MaxResults(pageSize).
+			SingleEvents(true).
+			OrderBy("startTime").
+			Context(ctx)
+		if next != "" {
+			req.PageToken(next)
+		}
+		resp, err := req.Do()
+		if err != nil {
+			return nil, fmt.Errorf("fetch events: %w", err)
+		}
+		out = append(out, resp.Items...)
+		next = resp.NextPageToken
+		if next == "" {
+			break
+		}
+	}
+	return out, nil
+}
+
 // BulkDeleteCritical mirrors `gcal delete -C`: deletes every critical event.
 // Recurring series are deleted once (master id) rather than once per upcoming
 // instance, so a series never 404s on its own earlier deletion.
 func (s *Service) BulkDeleteCritical(ctx context.Context) ([]BulkDeleteItem, error) {
-	upcoming, err := s.fetchUpcoming(ctx)
+	upcoming, err := s.fetchUpcomingAll(ctx)
 	if err != nil {
 		return nil, err
 	}

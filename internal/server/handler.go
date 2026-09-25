@@ -24,6 +24,7 @@ import (
 //	GET  /api/events          -> list (mirrors `gcal list`)
 //	POST/DELETE /api/events/delete -> {id, delete_series} (mirrors `gcal delete <id> [-A]`)
 //	POST /api/events/bulk-delete   -> {kind: "recurring"|"critical"} (mirrors `gcal delete -A|-C`)
+//	POST /api/events/edit         -> {id, use_default, reminders} (edit reminder config)
 //
 // Mutating and data endpoints require `Authorization: Bearer <API_TOKEN>`.
 func Handler(w http.ResponseWriter, r *http.Request) {
@@ -66,6 +67,13 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		handleBulkDelete(w, r)
+
+	case "/api/events/edit":
+		if r.Method != http.MethodPost {
+			writeErr(w, http.StatusMethodNotAllowed, "method not allowed (use POST)")
+			return
+		}
+		handleEditEvent(w, r)
 
 	default:
 		writeErr(w, http.StatusNotFound, "not found")
@@ -115,16 +123,22 @@ func handleRemind(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, http.StatusOK, message, resp)
 }
 
+type reminderItem struct {
+	Method  string `json:"method"`
+	Minutes int    `json:"minutes"`
+}
+
 type eventJSON struct {
-	ID                string `json:"id"`
-	MasterID          string `json:"master_id"`
-	Summary           string `json:"summary"`
-	Critical          bool   `json:"critical"`
-	Recurring         bool   `json:"recurring"`
-	StartsAt          string `json:"starts_at,omitempty"`
-	StartsAtISO       string `json:"starts_at_iso,omitempty"`
-	Time              string `json:"time,omitempty"`
-	RecurrenceDisplay string `json:"recurrence_display,omitempty"`
+	ID                string         `json:"id"`
+	MasterID          string         `json:"master_id"`
+	Summary           string         `json:"summary"`
+	Critical          bool           `json:"critical"`
+	Recurring         bool           `json:"recurring"`
+	StartsAt          string         `json:"starts_at,omitempty"`
+	StartsAtISO       string         `json:"starts_at_iso,omitempty"`
+	Time              string         `json:"time,omitempty"`
+	RecurrenceDisplay string         `json:"recurrence_display,omitempty"`
+	Reminders         []reminderItem `json:"reminders,omitempty"`
 }
 
 func handleListEvents(w http.ResponseWriter, r *http.Request) {
@@ -150,6 +164,10 @@ func handleListEvents(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "invalid limit")
 			return
 		}
+		if n > gcal.MaxListLimit {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("limit too high (max %d)", gcal.MaxListLimit))
+			return
+		}
 		opts.Limit = n
 	}
 
@@ -160,7 +178,7 @@ func handleListEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events, err := svc.ListEvents(ctx, opts)
+	events, hasMore, err := svc.ListEvents(ctx, opts)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -175,7 +193,11 @@ func handleListEvents(w http.ResponseWriter, r *http.Request) {
 	if len(items) == 0 {
 		message = "No events found"
 	}
-	writeOK(w, http.StatusOK, message, map[string]interface{}{"count": len(items), "events": items})
+	writeOK(w, http.StatusOK, message, map[string]interface{}{
+		"count":    len(items),
+		"has_more": hasMore,
+		"events":   items,
+	})
 }
 
 func eventJSONFrom(e gcal.EventItem) eventJSON {
@@ -186,6 +208,12 @@ func eventJSONFrom(e gcal.EventItem) eventJSON {
 		Critical:          e.Critical,
 		Recurring:         e.Recurring,
 		RecurrenceDisplay: e.RecurrenceDisplay,
+	}
+	if len(e.Reminders) > 0 {
+		out.Reminders = make([]reminderItem, 0, len(e.Reminders))
+		for _, r := range e.Reminders {
+			out.Reminders = append(out.Reminders, reminderItem{Method: r.Method, Minutes: r.Minutes})
+		}
 	}
 	if !e.Start.IsZero() {
 		out.StartsAt = e.Start.Format("2006-01-02 3:04 PM")
@@ -312,6 +340,56 @@ func handleBulkDelete(w http.ResponseWriter, r *http.Request) {
 		"failed":  failed,
 		"items":   result,
 	})
+}
+
+type editRequest struct {
+	ID         string         `json:"id"`
+	UseDefault bool           `json:"use_default"`
+	Reminders  []reminderItem `json:"reminders"`
+}
+
+func handleEditEvent(w http.ResponseWriter, r *http.Request) {
+	if !apiauth.Valid(r) {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req editRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.ID == "" {
+		writeErr(w, http.StatusBadRequest, "id is required")
+		return
+	}
+
+	patch := gcal.ReminderPatch{UseDefault: req.UseDefault}
+	for _, r := range req.Reminders {
+		if r.Minutes < 0 {
+			writeErr(w, http.StatusBadRequest, "reminder minutes must be >= 0")
+			return
+		}
+		patch.Reminders = append(patch.Reminders, gcal.ReminderSetting{Method: r.Method, Minutes: r.Minutes})
+	}
+
+	ctx := r.Context()
+	svc, err := gcal.NewService(ctx)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if err := svc.EditReminders(ctx, req.ID, patch); err != nil {
+		if errors.Is(err, gcal.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "event not found")
+			return
+		}
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	writeOK(w, http.StatusOK, "Reminders updated", map[string]interface{}{"updated": true, "id": req.ID})
 }
 
 func boolQuery(v string) bool {

@@ -23,6 +23,7 @@ func main() {
 	mux.HandleFunc("/api/events", server.Handler)
 	mux.HandleFunc("/api/events/delete", server.Handler)
 	mux.HandleFunc("/api/events/bulk-delete", server.Handler)
+	mux.HandleFunc("/api/events/edit", server.Handler)
 
 	addr := os.Getenv("PORT")
 	if addr == "" {
@@ -35,6 +36,7 @@ func main() {
 	log.Printf("  GET  /api/events  ?limit&recurring_only&critical_only&normal_only")
 	log.Printf("  POST /api/events/delete       {id,delete_series}")
 	log.Printf("  POST /api/events/bulk-delete  {kind: recurring|critical}")
+	log.Printf("  POST /api/events/edit         {id,use_default,reminders}")
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("server error: %v", err)
 	}

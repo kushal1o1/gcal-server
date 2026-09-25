@@ -151,3 +151,61 @@ func TestFilterItems(t *testing.T) {
 		t.Errorf("no filter = %d events", len(got))
 	}
 }
+
+func TestRemindersFrom(t *testing.T) {
+	if got := remindersFrom(&calendar.Event{}); got != nil {
+		t.Errorf("nil reminders = %v, want nil", got)
+	}
+	useDefault := &calendar.Event{Reminders: &calendar.EventReminders{UseDefault: true}}
+	if got := remindersFrom(useDefault); got != nil {
+		t.Errorf("default reminders = %v, want nil", got)
+	}
+	normal := &calendar.Event{Reminders: &calendar.EventReminders{
+		Overrides: []*calendar.EventReminder{{Method: "popup", Minutes: 0}},
+	}}
+	got := remindersFrom(normal)
+	if len(got) != 1 || got[0].Method != "popup" || got[0].Minutes != 0 {
+		t.Errorf("normal reminders = %v", got)
+	}
+	critical := &calendar.Event{Reminders: &calendar.EventReminders{
+		Overrides: []*calendar.EventReminder{
+			{Method: "email", Minutes: 1440},
+			{Method: "popup", Minutes: 60},
+			{Method: "email", Minutes: 0},
+			{Method: "popup", Minutes: 0},
+		},
+	}}
+	got = remindersFrom(critical)
+	if len(got) != 4 || got[0].Minutes != 1440 {
+		t.Errorf("critical reminders = %v", got)
+	}
+}
+
+func TestEnrichRecurring(t *testing.T) {
+	master := &calendar.Event{
+		Id:         "m1",
+		Recurrence: []string{"RRULE:FREQ=MONTHLY;INTERVAL=1"},
+		Reminders: &calendar.EventReminders{
+			Overrides: []*calendar.EventReminder{{Method: "email", Minutes: 1440}, {Method: "popup", Minutes: 60}},
+		},
+	}
+	events := []EventItem{
+		{ID: "inst1", MasterID: "m1", Summary: "ocean eyes", Recurring: true},
+		{ID: "p1", MasterID: "p1", Summary: "plain", Recurring: false},
+	}
+	masters := map[string]*calendar.Event{"m1": master}
+	enrichRecurring(events, masters)
+
+	if !events[0].Critical {
+		t.Error("recurring instance should inherit critical from master")
+	}
+	if events[0].RecurrenceDisplay != "Every 1 month" {
+		t.Errorf("recurrence display = %q", events[0].RecurrenceDisplay)
+	}
+	if len(events[0].Reminders) != 2 || events[0].Reminders[0].Method != "email" {
+		t.Errorf("instance reminders = %v", events[0].Reminders)
+	}
+	if events[1].Critical || events[1].Recurring || len(events[1].Reminders) != 0 {
+		t.Error("plain event should be untouched by enrichment")
+	}
+}
