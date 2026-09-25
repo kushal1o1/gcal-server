@@ -20,6 +20,9 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/remind", server.Handler)
 	mux.HandleFunc("/api/health", server.Handler)
+	mux.HandleFunc("/api/events", server.Handler)
+	mux.HandleFunc("/api/events/delete", server.Handler)
+	mux.HandleFunc("/api/events/bulk-delete", server.Handler)
 
 	addr := os.Getenv("PORT")
 	if addr == "" {
@@ -29,6 +32,9 @@ func main() {
 
 	log.Printf("gcal-svr server on %s", addr)
 	log.Printf("  POST /api/remind  {text,create}  (Authorization: Bearer <API_TOKEN>)")
+	log.Printf("  GET  /api/events  ?limit&recurring_only&critical_only&normal_only")
+	log.Printf("  POST /api/events/delete       {id,delete_series}")
+	log.Printf("  POST /api/events/bulk-delete  {kind: recurring|critical}")
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("server error: %v", err)
 	}

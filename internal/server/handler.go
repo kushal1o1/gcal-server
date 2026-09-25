@@ -2,7 +2,10 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/kushal1o1/gcal-svr/internal/apiauth"
@@ -10,22 +13,66 @@ import (
 	"github.com/kushal1o1/gcal-svr/internal/remind"
 )
 
-// Handler serves /api/remind (and /api/health) for both the standalone Vercel
-// Go server and the local dev server.
+// Handler serves the API for both the standalone Vercel Go server and the
+// local dev server. Every response uses a uniform envelope:
 //
-//	GET  /api/remind          -> health/probe JSON
-//	POST /api/remind          -> {text, create} with `Authorization: Bearer <API_TOKEN>`
+//	{"success": true, "message": "...", "data": {...}}
+//
+//	GET  /api/health          -> health probe
+//	GET  /api/remind          -> health probe
+//	POST /api/remind          -> {text, create}
+//	GET  /api/events          -> list (mirrors `gcal list`)
+//	POST/DELETE /api/events/delete -> {id, delete_series} (mirrors `gcal delete <id> [-A]`)
+//	POST /api/events/bulk-delete   -> {kind: "recurring"|"critical"} (mirrors `gcal delete -A|-C`)
+//
+// Mutating and data endpoints require `Authorization: Bearer <API_TOKEN>`.
 func Handler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet || r.Method == http.MethodHead {
-		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "service": "gcal-svr"})
-		return
-	}
+	switch r.URL.Path {
+	case "/api/health":
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		writeOK(w, http.StatusOK, "ok", map[string]interface{}{"service": "gcal-svr"})
 
-	if r.Method != http.MethodPost {
-		writeErr(w, http.StatusMethodNotAllowed, "method not allowed (use POST)")
-		return
-	}
+	case "/api/remind":
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			writeOK(w, http.StatusOK, "ok", map[string]interface{}{"service": "gcal-svr"})
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeErr(w, http.StatusMethodNotAllowed, "method not allowed (use POST)")
+			return
+		}
+		handleRemind(w, r)
 
+	case "/api/events":
+		if r.Method != http.MethodGet {
+			writeErr(w, http.StatusMethodNotAllowed, "method not allowed (use GET)")
+			return
+		}
+		handleListEvents(w, r)
+
+	case "/api/events/delete":
+		if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+			writeErr(w, http.StatusMethodNotAllowed, "method not allowed (use POST)")
+			return
+		}
+		handleDeleteEvent(w, r)
+
+	case "/api/events/bulk-delete":
+		if r.Method != http.MethodPost {
+			writeErr(w, http.StatusMethodNotAllowed, "method not allowed (use POST)")
+			return
+		}
+		handleBulkDelete(w, r)
+
+	default:
+		writeErr(w, http.StatusNotFound, "not found")
+	}
+}
+
+func handleRemind(w http.ResponseWriter, r *http.Request) {
 	if !apiauth.Valid(r) {
 		writeErr(w, http.StatusUnauthorized, "unauthorized")
 		return
@@ -61,7 +108,218 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, resp)
+	message := "Preview ready"
+	if resp.Created {
+		message = "Event created"
+	}
+	writeOK(w, http.StatusOK, message, resp)
+}
+
+type eventJSON struct {
+	ID                string `json:"id"`
+	MasterID          string `json:"master_id"`
+	Summary           string `json:"summary"`
+	Critical          bool   `json:"critical"`
+	Recurring         bool   `json:"recurring"`
+	StartsAt          string `json:"starts_at,omitempty"`
+	StartsAtISO       string `json:"starts_at_iso,omitempty"`
+	Time              string `json:"time,omitempty"`
+	RecurrenceDisplay string `json:"recurrence_display,omitempty"`
+}
+
+func handleListEvents(w http.ResponseWriter, r *http.Request) {
+	if !apiauth.Valid(r) {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	q := r.URL.Query()
+	opts := gcal.ListOptions{
+		Limit:         -1,
+		RecurringOnly: boolQuery(q.Get("recurring_only")),
+		CriticalOnly:  boolQuery(q.Get("critical_only")),
+		NormalOnly:    boolQuery(q.Get("normal_only")),
+	}
+	if opts.CriticalOnly && opts.NormalOnly {
+		writeErr(w, http.StatusBadRequest, "cannot use critical_only and normal_only together")
+		return
+	}
+	if l := q.Get("limit"); l != "" {
+		n, err := strconv.Atoi(l)
+		if err != nil || n < 0 {
+			writeErr(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		opts.Limit = n
+	}
+
+	ctx := r.Context()
+	svc, err := gcal.NewService(ctx)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	events, err := svc.ListEvents(ctx, opts)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	items := make([]eventJSON, 0, len(events))
+	for _, e := range events {
+		items = append(items, eventJSONFrom(e))
+	}
+
+	message := fmt.Sprintf("%d events found", len(items))
+	if len(items) == 0 {
+		message = "No events found"
+	}
+	writeOK(w, http.StatusOK, message, map[string]interface{}{"count": len(items), "events": items})
+}
+
+func eventJSONFrom(e gcal.EventItem) eventJSON {
+	out := eventJSON{
+		ID:                e.ID,
+		MasterID:          e.MasterID,
+		Summary:           e.Summary,
+		Critical:          e.Critical,
+		Recurring:         e.Recurring,
+		RecurrenceDisplay: e.RecurrenceDisplay,
+	}
+	if !e.Start.IsZero() {
+		out.StartsAt = e.Start.Format("2006-01-02 3:04 PM")
+		out.StartsAtISO = e.Start.Format(time.RFC3339)
+		out.Time = e.Start.Format("3:04 PM, 02-Jan")
+	}
+	if e.StartDate != "" {
+		out.StartsAt = e.StartDate
+		out.Time = e.StartDate
+	}
+	return out
+}
+
+type deleteRequest struct {
+	ID           string `json:"id"`
+	DeleteSeries bool   `json:"delete_series"`
+}
+
+func handleDeleteEvent(w http.ResponseWriter, r *http.Request) {
+	if !apiauth.Valid(r) {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req deleteRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.ID == "" {
+		writeErr(w, http.StatusBadRequest, "id is required")
+		return
+	}
+
+	ctx := r.Context()
+	svc, err := gcal.NewService(ctx)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if err := svc.DeleteEvent(ctx, req.ID); err != nil {
+		if errors.Is(err, gcal.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "event not found")
+			return
+		}
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	message := "Event deleted"
+	if req.DeleteSeries {
+		message = "Recurring series deleted"
+	}
+	writeOK(w, http.StatusOK, message, map[string]interface{}{"deleted": true, "id": req.ID})
+}
+
+type bulkDeleteRequest struct {
+	Kind string `json:"kind"`
+}
+
+type bulkItemJSON struct {
+	Summary string `json:"summary"`
+	Series  bool   `json:"series"`
+	OK      bool   `json:"ok"`
+	Err     string `json:"error,omitempty"`
+}
+
+func handleBulkDelete(w http.ResponseWriter, r *http.Request) {
+	if !apiauth.Valid(r) {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req bulkDeleteRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	ctx := r.Context()
+	svc, err := gcal.NewService(ctx)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	var items []gcal.BulkDeleteItem
+	kind := req.Kind
+	switch kind {
+	case "recurring":
+		items, err = svc.BulkDeleteRecurring(ctx)
+	case "critical":
+		items, err = svc.BulkDeleteCritical(ctx)
+	default:
+		writeErr(w, http.StatusBadRequest, `kind must be "recurring" or "critical"`)
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	deleted, failed := 0, 0
+	result := make([]bulkItemJSON, 0, len(items))
+	for _, it := range items {
+		if it.OK {
+			deleted++
+		} else {
+			failed++
+		}
+		result = append(result, bulkItemJSON{Summary: it.Summary, Series: it.Series, OK: it.OK, Err: it.Err})
+	}
+
+	message := fmt.Sprintf("Deleted %d %s events", deleted, kind)
+	switch {
+	case deleted == 0 && failed == 0:
+		message = fmt.Sprintf("No %s events found", kind)
+	case failed > 0:
+		message += fmt.Sprintf(" (%d failed)", failed)
+	}
+	writeOK(w, http.StatusOK, message, map[string]interface{}{
+		"deleted": deleted,
+		"failed":  failed,
+		"items":   result,
+	})
+}
+
+func boolQuery(v string) bool {
+	switch v {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -70,6 +328,10 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+func writeOK(w http.ResponseWriter, status int, message string, data interface{}) {
+	writeJSON(w, status, map[string]interface{}{"success": true, "message": message, "data": data})
+}
+
 func writeErr(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]interface{}{"error": message})
+	writeJSON(w, status, map[string]interface{}{"success": false, "message": message, "data": nil})
 }
