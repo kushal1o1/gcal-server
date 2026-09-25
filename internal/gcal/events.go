@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -18,9 +19,17 @@ import (
 var ErrNotFound = errors.New("event not found")
 
 const (
-	pageSize         = 100
-	maxPages         = 10
-	defaultListLimit = 5
+	pageSize = 100
+	// fetchUpcomingPageSize is the page size for the expanded upcoming instance
+	// listing: larger pages surface the distinct one-off events in fewer
+	// round-trips (each page costs hundreds of ms on Google's side).
+	fetchUpcomingPageSize = 250
+	maxPages              = 10
+	defaultListLimit      = 5
+	// fetchMastersMaxResults is the page size for the recurring-master sweep:
+	// Google caps events.list at 2500, so one round-trip covers most calendars
+	// instead of the default-100 sweep the instance listing uses.
+	fetchMastersMaxResults = 2500
 	// MaxListLimit caps the largest limit a caller may request with listEvents.
 	MaxListLimit = 500
 )
@@ -91,9 +100,10 @@ func (s *Service) listUpcoming(ctx context.Context, opts ListOptions) ([]EventIt
 	next := ""
 	count := 0
 	for page := 0; page < maxPages; page++ {
+		start := time.Now()
 		req := s.Svc.Events.List(s.CalendarID).
 			TimeMin(now).
-			MaxResults(pageSize).
+			MaxResults(fetchUpcomingPageSize).
 			SingleEvents(true).
 			OrderBy("startTime").
 			Context(ctx)
@@ -104,13 +114,23 @@ func (s *Service) listUpcoming(ctx context.Context, opts ListOptions) ([]EventIt
 		if err != nil {
 			return nil, false, fmt.Errorf("fetch events: %w", err)
 		}
+		log.Printf("[events] instance page %d: %d items, %.0fms", page, len(resp.Items), float64(time.Since(start))*1e-3)
 		raw = append(raw, resp.Items...)
 		next = resp.NextPageToken
 		if limit == 0 {
 			return []EventItem{}, next != "" || len(raw) > 0, nil
 		}
+		prevCount := count
 		if len(raw) > 0 {
 			count = s.previewCount(ctx, raw, opts, &masters)
+		}
+		// A page that added no *new distinct* events means everything relevant is
+		// already in hand. Without this, an infinite recurring series (one
+		// instance per Google page, collapsed by dedupeRecurring) would sweep
+		// every page of the calendar.
+		if page > 0 && count == prevCount {
+			next = ""
+			break
 		}
 		if next == "" || count >= limit {
 			break
@@ -207,9 +227,10 @@ func (s *Service) ensureMasters(ctx context.Context, m *map[string]*calendar.Eve
 func (s *Service) fetchMastersMap(ctx context.Context) (map[string]*calendar.Event, error) {
 	out := map[string]*calendar.Event{}
 	next := ""
+	start := time.Now()
 	for page := 0; page < maxPages; page++ {
 		req := s.Svc.Events.List(s.CalendarID).
-			MaxResults(pageSize).
+			MaxResults(fetchMastersMaxResults).
 			SingleEvents(false).
 			OrderBy("updated").
 			Context(ctx)
@@ -220,6 +241,7 @@ func (s *Service) fetchMastersMap(ctx context.Context) (map[string]*calendar.Eve
 		if err != nil {
 			return nil, fmt.Errorf("fetch master recurring events: %w", err)
 		}
+		log.Printf("[events] masters page %d: %d items, %.0fms", page, len(resp.Items), float64(time.Since(start))*1e-3)
 		for _, e := range resp.Items {
 			if len(e.Recurrence) > 0 {
 				out[e.Id] = e

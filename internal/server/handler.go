@@ -119,6 +119,7 @@ func handleRemind(w http.ResponseWriter, r *http.Request) {
 	message := "Preview ready"
 	if resp.Created {
 		message = "Event created"
+		defaultListCache.Clear()
 	}
 	writeOK(w, http.StatusOK, message, resp)
 }
@@ -178,6 +179,14 @@ func handleListEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cacheKey := listEventsKey(opts)
+	if body, status, ok := defaultListCache.Get(cacheKey); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write(body)
+		return
+	}
+
 	events, hasMore, err := svc.ListEvents(ctx, opts)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
@@ -193,11 +202,15 @@ func handleListEvents(w http.ResponseWriter, r *http.Request) {
 	if len(items) == 0 {
 		message = "No events found"
 	}
-	writeOK(w, http.StatusOK, message, map[string]interface{}{
+	body := marshalEnvelope(http.StatusOK, message, map[string]interface{}{
 		"count":    len(items),
 		"has_more": hasMore,
 		"events":   items,
 	})
+	defaultListCache.Put(cacheKey, body, http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }
 
 func eventJSONFrom(e gcal.EventItem) eventJSON {
@@ -268,6 +281,7 @@ func handleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 	if req.DeleteSeries {
 		message = "Recurring series deleted"
 	}
+	defaultListCache.Clear()
 	writeOK(w, http.StatusOK, message, map[string]interface{}{"deleted": true, "id": req.ID})
 }
 
@@ -335,6 +349,9 @@ func handleBulkDelete(w http.ResponseWriter, r *http.Request) {
 	case failed > 0:
 		message += fmt.Sprintf(" (%d failed)", failed)
 	}
+	if deleted > 0 {
+		defaultListCache.Clear()
+	}
 	writeOK(w, http.StatusOK, message, map[string]interface{}{
 		"deleted": deleted,
 		"failed":  failed,
@@ -389,6 +406,7 @@ func handleEditEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	defaultListCache.Clear()
 	writeOK(w, http.StatusOK, "Reminders updated", map[string]interface{}{"updated": true, "id": req.ID})
 }
 
@@ -412,4 +430,19 @@ func writeOK(w http.ResponseWriter, status int, message string, data interface{}
 
 func writeErr(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]interface{}{"success": false, "message": message, "data": nil})
+}
+
+// marshalEnvelope renders the standard success envelope without touching the
+// writer, so /api/events responses can be cached verbatim.
+func marshalEnvelope(status int, message string, data interface{}) []byte {
+	body, err := json.Marshal(map[string]interface{}{"success": true, "message": message, "data": data})
+	if err != nil {
+		return []byte(`{"success":true,"message":"","data":null}`)
+	}
+	return body
+}
+
+// listEventsKey canonicalises the list options into a cache key.
+func listEventsKey(opts gcal.ListOptions) string {
+	return fmt.Sprintf("l=%d,r=%v,c=%v,n=%v", opts.Limit, opts.RecurringOnly, opts.CriticalOnly, opts.NormalOnly)
 }
