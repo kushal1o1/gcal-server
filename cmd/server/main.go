@@ -1,7 +1,8 @@
-// Local dev server exposing the same /api/remind handler as Vercel, so you can
-// curl-test the full pipeline without deploying.
+// gcal-svr server. Runs the same /api/remind handler locally and on Vercel
+// (standalone Go server mode: Vercel builds ./cmd/server and proxy routes every
+// request to it).
 //
-//	GCAL_SERVICE_ACCOUNT_FILE=./gcal-service-key.json API_TOKEN=dev go run ./local/devserver
+//	GCAL_SERVICE_ACCOUNT_FILE=./gcal-service-key.json API_TOKEN=dev go run ./cmd/server
 package main
 
 import (
@@ -10,15 +11,15 @@ import (
 	"os"
 	"strings"
 
-	"github.com/kushal1o1/gcal-svr/api"
+	"github.com/kushal1o1/gcal-svr/internal/server"
 )
 
 func main() {
 	loadDotEnv()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/remind", api.Handler)
-	mux.HandleFunc("/api/health", api.Handler)
+	mux.HandleFunc("/api/remind", server.Handler)
+	mux.HandleFunc("/api/health", server.Handler)
 
 	addr := os.Getenv("PORT")
 	if addr == "" {
@@ -26,7 +27,7 @@ func main() {
 	}
 	addr = ":" + addr
 
-	log.Printf("gcal-svr local server on %s", addr)
+	log.Printf("gcal-svr server on %s", addr)
 	log.Printf("  POST /api/remind  {text,create}  (Authorization: Bearer <API_TOKEN>)")
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("server error: %v", err)

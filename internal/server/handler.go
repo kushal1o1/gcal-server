@@ -1,4 +1,4 @@
-package api
+package server
 
 import (
 	"encoding/json"
@@ -10,7 +10,8 @@ import (
 	"github.com/kushal1o1/gcal-svr/internal/remind"
 )
 
-// Handler is the Vercel Go Function for /api/remind.
+// Handler serves /api/remind (and /api/health) for both the standalone Vercel
+// Go server and the local dev server.
 //
 //	GET  /api/remind          -> health/probe JSON
 //	POST /api/remind          -> {text, create} with `Authorization: Bearer <API_TOKEN>`
