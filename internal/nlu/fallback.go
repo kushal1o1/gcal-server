@@ -28,12 +28,23 @@ var fallbackPatterns = []struct {
 var (
 	reTodayTomorrow = regexp.MustCompile(`\b(day after tomorrow|tomorrow|next week|tonight|today|now|next month|next year)\b`)
 	reTimeOfDay     = regexp.MustCompile(`(?i)(?:at|around|by|before)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)|\d{2}:\d{2})`)
-	reRecurring     = regexp.MustCompile(`(?i)\b(every|each|weekly|monthly|daily|yearly|annually|\-A|per\s+(day|week|month|year))\b`)
+	reRecurring     = regexp.MustCompile(`(?i)\b(every|each|weekly|monthly|daily|yearly|annually|per\s+(day|week|month|year))\b`)
+	reDashA         = regexp.MustCompile(`(?i)-a\b`)
 	reCritical      = regexp.MustCompile(`(?i)\b(urgent|critical|important|asap|emergency|high\s+priority)\b`)
 	reCriticalCap   = regexp.MustCompile(`\bRemind\b`)
 	reFrequency     = regexp.MustCompile(`(?i)\b(?:every|each)\s+(?:\d+\s+)?(?:days?|weeks?|months?|years?|day|week|month|year|morning|afternoon|evening|night)\b`)
 	reUnitsClause   = regexp.MustCompile(`(\d+(?:\.\d+)?)\s*(?:days?|d|years?|yrs?|y|months?|mos?|m|hours?|hrs?|h|minutes?|mins?|min|weeks?|wks?|w)\b\s*(?:from now|later|after|from|ahead)?`)
+	reEveryCount    = regexp.MustCompile(`(?i)\b(every|each)\s+(?:(\d+)\s+)?(day|week|month|year|hour|minute)s?\b`)
+	reFreqWord      = regexp.MustCompile(`(?i)\b(daily|weekly|monthly|yearly|annually)\b`)
+	reEveryEach     = regexp.MustCompile(`(?i)\b(every|each)\b`)
+	reDayPart       = regexp.MustCompile(`(?i)\b(morning|afternoon|evening|night)\b`)
+	reFiller        = regexp.MustCompile(`(?i)\b(without\s+fail|don'?t\s+forget|make\s+sure|remember\s+to|remember|do\s+not\s+forget|no\s+matter\s+what)\b`)
 )
+
+var recurWordFreq = map[string]string{
+	"day": "DAILY", "week": "WEEKLY", "month": "MONTHLY",
+	"year": "YEARLY", "hour": "HOURLY", "minute": "MINUTELY",
+}
 
 var wordMap = map[string]struct {
 	amount float64
@@ -56,7 +67,7 @@ func ParseFallback(_ context.Context, text string) (*EventIntent, error) {
 	lower := strings.ToLower(text)
 	intent := &EventIntent{}
 
-	intent.Recurring = reRecurring.MatchString(lower)
+	intent.Recurring = reRecurring.MatchString(lower) || reDashA.MatchString(text)
 	intent.Critical = reCritical.MatchString(lower) || reCriticalCap.MatchString(text)
 
 	// Time of day.
@@ -91,11 +102,8 @@ func ParseFallback(_ context.Context, text string) (*EventIntent, error) {
 		}
 	}
 
-	// Recurring monthly with no explicit "in X": default to 1M (matches -A).
-	if intent.Recurring && intent.Unit == "" && (strings.Contains(lower, "month") || strings.Contains(lower, "-a")) {
-		intent.Amount = 1
-		intent.Unit = "M"
-	}
+	setRecurrence(intent, lower)
+	intent.Normalize()
 
 	intent.Summary = stripSummary(text)
 	if intent.Summary == "" {
@@ -109,6 +117,51 @@ func ParseFallback(_ context.Context, text string) (*EventIntent, error) {
 	return intent, nil
 }
 
+// setRecurrence turns a recurring flag into an explicit RRULE frequency and
+// interval: word-based ("every 2 weeks", "weekly") wins, then a bare iteration
+// flag ("-A") carries the offset unit, otherwise it defaults to daily.
+func setRecurrence(intent *EventIntent, lower string) {
+	if !intent.Recurring {
+		return
+	}
+
+	interval := 1
+	if m := reEveryCount.FindStringSubmatch(lower); m != nil {
+		if m[2] != "" {
+			if n, err := strconv.Atoi(m[2]); err == nil && n > 0 {
+				interval = n
+			}
+		}
+		if f, ok := recurWordFreq[m[3]]; ok {
+			intent.Freq = f
+			intent.Interval = interval
+			return
+		}
+	}
+
+	if m := reFreqWord.FindStringSubmatch(lower); m != nil {
+		switch strings.ToLower(m[1]) {
+		case "daily":
+			intent.Freq = "DAILY"
+		case "weekly":
+			intent.Freq = "WEEKLY"
+		case "monthly":
+			intent.Freq = "MONTHLY"
+		case "yearly", "annually":
+			intent.Freq = "YEARLY"
+		}
+		return
+	}
+
+	if intent.Amount > 0 {
+		intent.Freq = UnitToFreq(intent.Unit)
+		intent.Interval = int(intent.Amount)
+		if intent.Interval < 1 {
+			intent.Interval = 1
+		}
+	}
+}
+
 var reRemindVerb = regexp.MustCompile(`(?i)\b(remind|reminder|set\s*(a\s*)?reminder|remember)\b`)
 
 var errNoSummary = &summaryError{}
@@ -117,8 +170,9 @@ type summaryError struct{}
 
 func (*summaryError) Error() string { return "could not extract a summary from the phrase" }
 
-var reCommand = regexp.MustCompile(`(?i)^\s*(hey|yo|bro|please|pls|okay|ok)?\s*(critical|urgent|important|asap)?\s*(remind|reminder|remind me|remind me to|remind to|set a reminder|set reminder)\s*(me|us)?\s*(to|for|about|of)?\s*`)
+var reCommand = regexp.MustCompile(`(?i)^\s*(hey|yo|bro|please|pls|okay|ok|alright|listen)?\s*(critical|urgent|important|asap|emergency|priority)?\s*(reminder|remind me to|remind me|remind us to|remind us|remind to|remind|set(?: up)?(?: a)?(?: reminder| remind)|put(?: a)?(?: reminder| remind)|schedule(?: a)?(?: reminder| remind)|add(?: a)?(?: reminder| remind)|need(?: a)?(?: reminder| remind)|want(?: a)?(?: reminder| remind))\s*(me|us)?\s*(to|for|about|of|regarding|on)?\s*`)
 var reTrailing = regexp.MustCompile(`(?i)\b(in|at|to|for|from|the|a|an|my|your|our|of|on)\s*$`)
+var reLeader = regexp.MustCompile(`(?i)^\s*(the|a|an|my|your|our|their|his|her|its|for|about|regarding|of|to|on|in)\b\s*`)
 
 func stripSummary(text string) string {
 	s := text
@@ -128,6 +182,11 @@ func stripSummary(text string) string {
 	s = reTodayTomorrow.ReplaceAllStringFunc(s, func(string) string { return " " })
 	s = reTimeOfDay.ReplaceAllString(s, " ")
 	s = reFrequency.ReplaceAllString(s, " ")
+	s = reRecurring.ReplaceAllString(s, " ")
+	s = reDashA.ReplaceAllString(s, " ")
+	s = reEveryEach.ReplaceAllString(s, " ")
+	s = reDayPart.ReplaceAllString(s, " ")
+	s = reFiller.ReplaceAllString(s, " ")
 
 	// Remove leading command/filler words (repeat to eat multi-part verbs).
 	for prev := ""; prev != s; {
@@ -140,6 +199,13 @@ func stripSummary(text string) string {
 	// Drop trailing prepositions/stopwords left by stripped time clauses.
 	for prev := ""; prev != s; {
 		prev = s
+		s = reTrailing.ReplaceAllString(s, " ")
+	}
+
+	// Drop leftover leading articles/prepositions ("for a doctor appointment").
+	for prev := ""; prev != s; {
+		prev = s
+		s = reLeader.ReplaceAllString(s, " ")
 		s = reTrailing.ReplaceAllString(s, " ")
 	}
 

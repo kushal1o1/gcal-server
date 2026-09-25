@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"strings"
 
 	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/option"
@@ -55,6 +56,12 @@ func NewService(ctx context.Context) (*Service, error) {
 
 func loadServiceAccountKey() ([]byte, error) {
 	if b64 := os.Getenv("GCAL_SERVICE_ACCOUNT_B64"); b64 != "" {
+		b64 = strings.Map(func(r rune) rune {
+			if r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '%' {
+				return -1
+			}
+			return r
+		}, b64)
 		data, err := base64.StdEncoding.DecodeString(b64)
 		if err != nil {
 			return nil, fmt.Errorf("GCAL_SERVICE_ACCOUNT_B64 is not valid base64: %w", err)

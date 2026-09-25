@@ -49,6 +49,9 @@ func ComputeStartTime(intent *nlu.EventIntent, now time.Time) (time.Time, error)
 		if intent.Amount <= 0 && eventDT.Before(now) {
 			eventDT = eventDT.AddDate(0, 0, 1)
 		}
+	} else if intent.Unit == "H" || intent.Unit == "MIN" {
+		// Relative sub-day offsets keep their exact clock (now + offset),
+		// matching the CLI so "in 30 minutes" never lands in the past.
 	} else {
 		eventDT = time.Date(eventDT.Year(), eventDT.Month(), eventDT.Day(), 9, 0, 0, 0, eventDT.Location())
 	}
@@ -86,19 +89,19 @@ func BuildEvent(intent *nlu.EventIntent, start time.Time) *calendar.Event {
 	}
 
 	if intent.Recurring {
-		interval := int(intent.Amount)
+		freq := intent.Freq
+		if freq == "" {
+			freq = nlu.UnitToFreq(intent.Unit)
+		}
+		if freq == "" {
+			freq = "DAILY"
+		}
+		interval := intent.Interval
+		if interval < 1 {
+			interval = int(intent.Amount)
+		}
 		if interval < 1 {
 			interval = 1
-		}
-		freq := map[string]string{
-			"D":   "DAILY",
-			"M":   "MONTHLY",
-			"Y":   "YEARLY",
-			"H":   "HOURLY",
-			"MIN": "MINUTELY",
-		}[intent.Unit]
-		if freq == "" {
-			freq = "MONTHLY"
 		}
 		event.Recurrence = []string{fmt.Sprintf("RRULE:FREQ=%s;INTERVAL=%d", freq, interval)}
 	}

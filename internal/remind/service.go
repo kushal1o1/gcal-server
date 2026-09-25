@@ -30,6 +30,8 @@ type Response struct {
 	TimeOfDay   string  `json:"time_of_day,omitempty"`
 	Amount      float64 `json:"amount"`
 	Unit        string  `json:"unit"`
+	Freq        string  `json:"freq,omitempty"`
+	Interval    int     `json:"interval,omitempty"`
 	Fallback    bool    `json:"fallback_used"`
 	EventID     string  `json:"event_id,omitempty"`
 	Created     bool    `json:"created"`
@@ -68,6 +70,8 @@ func Run(ctx context.Context, req *Request, svc *gcal.Service, now time.Time) (*
 		TimeOfDay:   intent.TimeOfDay,
 		Amount:      intent.Amount,
 		Unit:        intent.Unit,
+		Freq:        intent.Freq,
+		Interval:    intent.Interval,
 		Fallback:    fallbackUsed,
 	}
 
