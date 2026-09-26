@@ -29,6 +29,9 @@ import (
 // Mutating and data endpoints require `Authorization: Bearer <API_TOKEN>`.
 func Handler(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
+	case "/":
+		handleRoot(w, r)
+
 	case "/api/health":
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			writeErr(w, http.StatusMethodNotAllowed, "method not allowed")

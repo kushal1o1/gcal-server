@@ -18,6 +18,7 @@ func main() {
 	loadDotEnv()
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/", server.Handler)
 	mux.HandleFunc("/api/remind", server.Handler)
 	mux.HandleFunc("/api/health", server.Handler)
 	mux.HandleFunc("/api/events", server.Handler)
@@ -32,6 +33,7 @@ func main() {
 	addr = ":" + addr
 
 	log.Printf("gcal-svr server on %s", addr)
+	log.Printf("  GET  /                   landing page (HTML)")
 	log.Printf("  POST /api/remind  {text,create}  (Authorization: Bearer <API_TOKEN>)")
 	log.Printf("  GET  /api/events  ?limit&recurring_only&critical_only&normal_only")
 	log.Printf("  POST /api/events/delete       {id,delete_series}")
