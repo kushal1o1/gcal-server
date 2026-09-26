@@ -97,6 +97,7 @@ func (s *Service) listUpcoming(ctx context.Context, opts ListOptions) ([]EventIt
 	var raw []*calendar.Event
 	var masters map[string]*calendar.Event
 	now := time.Now().In(timeparse.NepalTZ).Format(time.RFC3339)
+	nowT := time.Now()
 	next := ""
 	count := 0
 	for page := 0; page < maxPages; page++ {
@@ -115,6 +116,7 @@ func (s *Service) listUpcoming(ctx context.Context, opts ListOptions) ([]EventIt
 			return nil, false, fmt.Errorf("fetch events: %w", err)
 		}
 		log.Printf("[events] instance page %d: %d items, %.0fms", page, len(resp.Items), float64(time.Since(start))*1e-3)
+		resp.Items = dropFinished(resp.Items, nowT)
 		raw = append(raw, resp.Items...)
 		next = resp.NextPageToken
 		if limit == 0 {
@@ -285,6 +287,24 @@ func dedupeRecurring(events []EventItem) []EventItem {
 				continue
 			}
 			seen[e.MasterID] = true
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// dropFinished removes expanded instances whose end has already passed so
+// finished reminders stop surfacing as "upcoming" (Google's own timeMin
+// filter keeps single events that merely overlap "now", and past events are
+// never removed from the calendar).
+func dropFinished(items []*calendar.Event, now time.Time) []*calendar.Event {
+	out := items[:0]
+	for _, e := range items {
+		if e.End != nil && e.End.DateTime != "" {
+			end, err := time.Parse(time.RFC3339, e.End.DateTime)
+			if err == nil && end.Before(now) {
+				continue
+			}
 		}
 		out = append(out, e)
 	}
