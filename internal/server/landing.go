@@ -136,17 +136,7 @@ const landingHTML = `<!doctype html>
 </style>
 </head>
 <body>
-  <main>
-    <div class="logo-wrap">
-      <svg class="logo" viewBox="0 0 512 512" aria-hidden="true">
-        <rect x="86" y="86" width="340" height="340" rx="64" fill="#89B4FA"/>
-        <rect x="124" y="112" width="112" height="48" rx="24" fill="var(--logo-mark)"/>
-        <circle cx="347" cy="347" r="39" fill="#F38BA8"/>
-        <text x="266" y="272" font-size="300" font-weight="900" fill="var(--logo-mark)"
-              text-anchor="middle" dominant-baseline="middle" font-family="ui-sans-serif, system-ui, sans-serif">G</text>
-      </svg>
-    </div>
-
+  <main>    
     <pre class="ascii">
  ███   ███   ███  █    
 █   █ █   █ █   █ █    
