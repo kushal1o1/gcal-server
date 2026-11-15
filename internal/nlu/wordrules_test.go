@@ -21,12 +21,12 @@ func TestWordRulesDeterministic(t *testing.T) {
 	}
 	for _, c := range cases {
 		for i := 0; i < 200; i++ {
-			got, err := ParseFallback(ctx, c.in)
+			got, err := Parse(ctx, c.in)
 			if err != nil {
-				t.Fatalf("ParseFallback(%q) error: %v", c.in, err)
+				t.Fatalf("Parse(%q) error: %v", c.in, err)
 			}
 			if got.Amount != c.amount || got.Unit != c.unit {
-				t.Fatalf("run %d: ParseFallback(%q) = (%v,%q), want (%v,%q)",
+				t.Fatalf("run %d: Parse(%q) = (%v,%q), want (%v,%q)",
 					i, c.in, got.Amount, got.Unit, c.amount, c.unit)
 			}
 		}
@@ -35,7 +35,7 @@ func TestWordRulesDeterministic(t *testing.T) {
 
 // \b boundaries: "now" must not match inside other words.
 func TestWordRulesWordBoundary(t *testing.T) {
-	got, err := ParseFallback(context.Background(), "remind me to check the snow tires")
+	got, err := Parse(context.Background(), "remind me to check the snow tires")
 	if err == nil && got.Unit != "" {
 		t.Errorf("'snow' matched a relative-date rule: unit=%q amount=%v", got.Unit, got.Amount)
 	}

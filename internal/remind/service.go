@@ -33,7 +33,6 @@ type Response struct {
 	Unit        string  `json:"unit"`
 	Freq        string  `json:"freq,omitempty"`
 	Interval    int     `json:"interval,omitempty"`
-	Fallback    bool    `json:"fallback_used"`
 	EventID     string  `json:"event_id,omitempty"`
 	Created     bool    `json:"created"`
 }
@@ -52,12 +51,14 @@ func Run(ctx context.Context, req *Request, svc *gcal.Service, now time.Time) (*
 		return nil, &Error{Status: 400, Message: "text is required"}
 	}
 
-	intent, fallbackUsed, err := nlu.Parse(ctx, req.Text)
+	t := time.Now()
+	intent, err := nlu.Parse(ctx, req.Text)
+	timing.Since("nlu", t)
 	if err != nil {
 		return nil, &Error{Status: 422, Message: err.Error()}
 	}
 
-	t := time.Now()
+	t = time.Now()
 	start, err := gcal.ComputeStartTime(intent, now)
 	timing.Since("compute_time", t)
 	if err != nil {
@@ -75,7 +76,6 @@ func Run(ctx context.Context, req *Request, svc *gcal.Service, now time.Time) (*
 		Unit:        intent.Unit,
 		Freq:        intent.Freq,
 		Interval:    intent.Interval,
-		Fallback:    fallbackUsed,
 	}
 
 	if req.Create {

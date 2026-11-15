@@ -8,11 +8,11 @@ import (
 	"strings"
 )
 
-// Fallback parser: a deterministic regex parser that mirrors gcal's command
+// Parser: a deterministic regex parser that mirrors gcal's command
 // grammar ("in 45 days", "tomorrow 5:30pm", "every month", "-A", "Remind",
 // "at 2am"). This is the only NLU path.
 
-var fallbackPatterns = []struct {
+var durationPatterns = []struct {
 	re   *regexp.Regexp
 	unit string
 	mult float64
@@ -79,9 +79,9 @@ func buildWordRules(rules []wordRule) []wordRule {
 	return rules
 }
 
-// ParseFallback deterministically parses a reminder phrase. For best-effort
+// Parse deterministically parses a reminder phrase. For best-effort
 // use only; returns an error when it cannot find enough structure.
-func ParseFallback(_ context.Context, text string) (*EventIntent, error) {
+func Parse(_ context.Context, text string) (*EventIntent, error) {
 	text = normalizeNumbers(text)
 	lower := strings.ToLower(text)
 	intent := &EventIntent{}
@@ -99,7 +99,7 @@ func ParseFallback(_ context.Context, text string) (*EventIntent, error) {
 	if a, u, ok := parseCompound(lower); ok {
 		intent.Amount, intent.Unit = a, u
 	}
-	for _, p := range fallbackPatterns {
+	for _, p := range durationPatterns {
 		if intent.Unit != "" {
 			break
 		}

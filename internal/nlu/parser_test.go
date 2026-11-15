@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestParseFallback(t *testing.T) {
+func TestParse(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {
 		in       string
@@ -36,31 +36,31 @@ func TestParseFallback(t *testing.T) {
 		{"water plants daily without fail", "water plants", 0, "", "", false, true, "DAILY", 1},
 	}
 	for _, c := range cases {
-		got, err := ParseFallback(ctx, c.in)
+		got, err := Parse(ctx, c.in)
 		if err != nil {
-			t.Errorf("ParseFallback(%q) error: %v", c.in, err)
+			t.Errorf("Parse(%q) error: %v", c.in, err)
 			continue
 		}
 		if got.Summary != c.summary {
-			t.Errorf("ParseFallback(%q) summary = %q, want %q", c.in, got.Summary, c.summary)
+			t.Errorf("Parse(%q) summary = %q, want %q", c.in, got.Summary, c.summary)
 		}
 		if got.Amount != c.amount || got.Unit != c.unit {
-			t.Errorf("ParseFallback(%q) time = (%v,%q), want (%v,%q)", c.in, got.Amount, got.Unit, c.amount, c.unit)
+			t.Errorf("Parse(%q) time = (%v,%q), want (%v,%q)", c.in, got.Amount, got.Unit, c.amount, c.unit)
 		}
 		if got.TimeOfDay != c.tod {
-			t.Errorf("ParseFallback(%q) time_of_day = %q, want %q", c.in, got.TimeOfDay, c.tod)
+			t.Errorf("Parse(%q) time_of_day = %q, want %q", c.in, got.TimeOfDay, c.tod)
 		}
 		if got.Critical != c.critical || got.Recurring != c.recur {
-			t.Errorf("ParseFallback(%q) flags = (crit:%v,recur:%v), want (crit:%v,recur:%v)",
+			t.Errorf("Parse(%q) flags = (crit:%v,recur:%v), want (crit:%v,recur:%v)",
 				c.in, got.Critical, got.Recurring, c.critical, c.recur)
 		}
 		if got.Freq != c.freq || got.Interval != c.interval {
-			t.Errorf("ParseFallback(%q) recurrence = (%q,%d), want (%q,%d)",
+			t.Errorf("Parse(%q) recurrence = (%q,%d), want (%q,%d)",
 				c.in, got.Freq, got.Interval, c.freq, c.interval)
 		}
 	}
 
-	if _, err := ParseFallback(ctx, "lorem ipsum dolor sit amet"); err == nil {
+	if _, err := Parse(ctx, "lorem ipsum dolor sit amet"); err == nil {
 		t.Error("garbage input should error")
 	}
 }

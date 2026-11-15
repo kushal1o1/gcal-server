@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Number-word support for the fallback parser: "three days" -> "3 days",
+// Number-word support for the parser: "three days" -> "3 days",
 // "in a week" -> "in 1 week", "half an hour" -> "30 minutes", and compound
 // durations like "2 hours 30 minutes" -> 150 MIN.
 

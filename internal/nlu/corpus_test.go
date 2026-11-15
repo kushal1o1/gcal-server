@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// corpusCase is one real-world phrase and what the fallback parser must
+// corpusCase is one real-world phrase and what the parser must
 // produce for it. Add a line here whenever a phrase is parsed wrongly.
 type corpusCase struct {
 	in      string
@@ -57,7 +57,7 @@ var corpus = []corpusCase{
 func TestCorpus(t *testing.T) {
 	ctx := context.Background()
 	for _, c := range corpus {
-		got, err := ParseFallback(ctx, c.in)
+		got, err := Parse(ctx, c.in)
 		if err != nil {
 			t.Errorf("%q: error: %v", c.in, err)
 			continue
