@@ -11,6 +11,7 @@ import (
 	"github.com/kushal1o1/gcal-svr/internal/apiauth"
 	"github.com/kushal1o1/gcal-svr/internal/gcal"
 	"github.com/kushal1o1/gcal-svr/internal/remind"
+	"github.com/kushal1o1/gcal-svr/internal/timing"
 )
 
 // Handler serves the API for both the standalone Vercel Go server and the
@@ -96,13 +97,17 @@ func handleRemind(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	total := time.Now()
+	defer timing.Since("remind_total", total)
 
 	// Calendar service is only needed when actually creating an event, so a
 	// preview (create=false) never fails on missing credentials.
 	var svc *gcal.Service
 	if req.Create {
+		t := time.Now()
 		var err error
 		svc, err = gcal.NewService(ctx)
+		timing.Since("gcal_service_init", t)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return

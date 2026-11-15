@@ -3,15 +3,42 @@ package timeparse
 
 import (
 	"fmt"
+	"log"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+	_ "time/tzdata" // embed the zone database so TIMEZONE works on minimal runtimes
 )
 
-// NepalTZ is Asia/Kathmandu (UTC+05:45, no DST). A fixed zone keeps things
-// deterministic on serverless runtimes where tzdata may be unavailable.
-var NepalTZ = time.FixedZone("Asia/Kathmandu", 5*60*60+45*60)
+// DefaultTimezone is used when TIMEZONE is not set.
+const DefaultTimezone = "Asia/Kathmandu"
+
+var (
+	appTZOnce sync.Once
+	appTZ     *time.Location
+)
+
+// AppTZ is the time zone for all calendar math and event times. It comes from
+// the TIMEZONE env var (an IANA name such as "Europe/London") and defaults to
+// Asia/Kathmandu. It is read on first use, so a .env file loaded in main works.
+func AppTZ() *time.Location {
+	appTZOnce.Do(func() {
+		name := os.Getenv("TIMEZONE")
+		if name == "" {
+			name = DefaultTimezone
+		}
+		loc, err := time.LoadLocation(name)
+		if err != nil {
+			log.Printf("timezone: invalid TIMEZONE %q, using %s: %v", name, DefaultTimezone, err)
+			loc, _ = time.LoadLocation(DefaultTimezone)
+		}
+		appTZ = loc
+	})
+	return appTZ
+}
 
 type unitPattern struct {
 	re   *regexp.Regexp
@@ -56,7 +83,7 @@ func ParseTimeUnit(timeStr string) (float64, string, error) {
 // fractional-month math and the Feb 29 -> Feb 28 leap-year guard.
 func CalculateFutureDate(value float64, unit string, base time.Time) (time.Time, error) {
 	if base.IsZero() {
-		base = time.Now().In(NepalTZ)
+		base = time.Now().In(AppTZ())
 	}
 	if value < 0 {
 		return time.Time{}, fmt.Errorf("negative time values not supported: %v", value)

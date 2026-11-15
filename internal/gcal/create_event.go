@@ -11,8 +11,6 @@ import (
 	"github.com/kushal1o1/gcal-svr/internal/timeparse"
 )
 
-const tz = "Asia/Kathmandu"
-
 // ComputeStartTime turns an EventIntent into an actual datetime, mirroring
 // gcal's create_calendar_event: relative offsets are applied on top of "now",
 // an explicit time-of-day overrides the clock, and otherwise events default to
@@ -22,7 +20,7 @@ const tz = "Asia/Kathmandu"
 // the next day so reminders never land in the past.
 func ComputeStartTime(intent *nlu.EventIntent, now time.Time) (time.Time, error) {
 	if now.IsZero() {
-		now = time.Now().In(timeparse.NepalTZ)
+		now = time.Now().In(timeparse.AppTZ())
 	}
 
 	var eventDT time.Time
@@ -65,6 +63,7 @@ func ComputeStartTime(intent *nlu.EventIntent, now time.Time) (time.Time, error)
 func BuildEvent(intent *nlu.EventIntent, start time.Time) *calendar.Event {
 	startISO := start.Format(time.RFC3339)
 	endISO := start.Add(time.Hour).Format(time.RFC3339)
+	tz := timeparse.AppTZ().String()
 
 	event := &calendar.Event{
 		Summary: intent.Summary,

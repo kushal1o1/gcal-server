@@ -10,6 +10,7 @@ import (
 	"github.com/kushal1o1/gcal-svr/internal/gcal"
 	"github.com/kushal1o1/gcal-svr/internal/nlu"
 	"github.com/kushal1o1/gcal-svr/internal/timeparse"
+	"github.com/kushal1o1/gcal-svr/internal/timing"
 )
 
 // Request from the mobile app. Create=false returns a preview without writing
@@ -56,14 +57,16 @@ func Run(ctx context.Context, req *Request, svc *gcal.Service, now time.Time) (*
 		return nil, &Error{Status: 422, Message: err.Error()}
 	}
 
+	t := time.Now()
 	start, err := gcal.ComputeStartTime(intent, now)
+	timing.Since("compute_time", t)
 	if err != nil {
 		return nil, &Error{Status: 422, Message: err.Error()}
 	}
 
 	resp := &Response{
 		Summary:     intent.Summary,
-		StartsAt:    start.In(timeparse.NepalTZ).Format("2006-01-02 3:04 PM"),
+		StartsAt:    start.In(timeparse.AppTZ()).Format("2006-01-02 3:04 PM"),
 		StartsAtISO: start.Format(time.RFC3339),
 		Critical:    intent.Critical,
 		Recurring:   intent.Recurring,
@@ -80,7 +83,9 @@ func Run(ctx context.Context, req *Request, svc *gcal.Service, now time.Time) (*
 			return nil, &Error{Status: 500, Message: "calendar service unavailable"}
 		}
 		event := gcal.BuildEvent(intent, start)
+		t = time.Now()
 		id, err := svc.CreateEvent(ctx, event)
+		timing.Since("gcal_create", t)
 		if err != nil {
 			return nil, &Error{Status: 502, Message: fmt.Sprintf("calendar create failed: %v", err)}
 		}

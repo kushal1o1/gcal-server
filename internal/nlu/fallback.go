@@ -3,14 +3,14 @@ package nlu
 import (
 	"context"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
 
 // Fallback parser: a deterministic regex parser that mirrors gcal's command
 // grammar ("in 45 days", "tomorrow 5:30pm", "every month", "-A", "Remind",
-// "at 2am"). Used when Gemini is unavailable or rate-limited so the app still
-// works.
+// "at 2am"). This is the only NLU path.
 
 var fallbackPatterns = []struct {
 	re   *regexp.Regexp
@@ -46,24 +46,43 @@ var recurWordFreq = map[string]string{
 	"year": "YEARLY", "hour": "HOURLY", "minute": "MINUTELY",
 }
 
-var wordMap = map[string]struct {
+// wordRule is one relative-date phrase. Matching is deterministic: the rules
+// are sorted longest phrase first, so "day after tomorrow" always beats
+// "tomorrow". (The old map-based lookup iterated in random order.)
+type wordRule struct {
+	phrase string
+	re     *regexp.Regexp
 	amount float64
 	unit   string
 	tod    string
-}{
-	"day after tomorrow": {2, "D", ""},
-	"tomorrow":           {1, "D", ""},
-	"next week":          {7, "D", ""},
-	"tonight":            {0, "", "8pm"},
-	"today":              {0, "", ""},
-	"now":                {0, "", ""},
-	"next month":         {1, "M", ""},
-	"next year":          {1, "Y", ""},
+}
+
+var wordRules = buildWordRules([]wordRule{
+	{phrase: "day after tomorrow", amount: 2, unit: "D"},
+	{phrase: "next month", amount: 1, unit: "M"},
+	{phrase: "next year", amount: 1, unit: "Y"},
+	{phrase: "next week", amount: 7, unit: "D"},
+	{phrase: "tomorrow", amount: 1, unit: "D"},
+	{phrase: "tonight", tod: "8pm"},
+	{phrase: "today"},
+	{phrase: "now"},
+})
+
+func buildWordRules(rules []wordRule) []wordRule {
+	sort.SliceStable(rules, func(i, j int) bool {
+		return len(rules[i].phrase) > len(rules[j].phrase)
+	})
+	for i := range rules {
+		// \b keeps "now" from matching inside "know" or "snow".
+		rules[i].re = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(rules[i].phrase) + `\b`)
+	}
+	return rules
 }
 
 // ParseFallback deterministically parses a reminder phrase. For best-effort
 // use only; returns an error when it cannot find enough structure.
 func ParseFallback(_ context.Context, text string) (*EventIntent, error) {
+	text = normalizeNumbers(text)
 	lower := strings.ToLower(text)
 	intent := &EventIntent{}
 
@@ -75,8 +94,15 @@ func ParseFallback(_ context.Context, text string) (*EventIntent, error) {
 		intent.TimeOfDay = strings.TrimSpace(strings.ToLower(m[1]))
 	}
 
-	// Duration.
+	// Duration. Compound ("2 hours 30 minutes") is checked first, since the
+	// single-unit patterns would otherwise take only the first half.
+	if a, u, ok := parseCompound(lower); ok {
+		intent.Amount, intent.Unit = a, u
+	}
 	for _, p := range fallbackPatterns {
+		if intent.Unit != "" {
+			break
+		}
 		if m := p.re.FindStringSubmatch(lower); m != nil {
 			v, err := strconv.ParseFloat(m[1], 64)
 			if err != nil {
@@ -90,8 +116,8 @@ func ParseFallback(_ context.Context, text string) (*EventIntent, error) {
 
 	// Word-based dates (only if no explicit duration was found).
 	if intent.Unit == "" {
-		for word, w := range wordMap {
-			if strings.Contains(lower, word) {
+		for _, w := range wordRules {
+			if w.re.MatchString(lower) {
 				intent.Amount = w.amount
 				intent.Unit = w.unit
 				if w.tod != "" {

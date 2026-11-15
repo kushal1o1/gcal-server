@@ -9,7 +9,7 @@ import (
 )
 
 func TestComputeStartTime(t *testing.T) {
-	now := time.Date(2026, 9, 25, 21, 15, 0, 0, timeparse.NepalTZ)
+	now := time.Date(2026, 9, 25, 21, 15, 0, 0, timeparse.AppTZ())
 
 	cases := []struct {
 		name   string
@@ -21,11 +21,11 @@ func TestComputeStartTime(t *testing.T) {
 		{"sub-day hours keep exact clock", &nlu.EventIntent{Summary: "x", Amount: 2, Unit: "H"},
 			now.Add(2 * time.Hour)},
 		{"day offset defaults to 9am", &nlu.EventIntent{Summary: "x", Amount: 45, Unit: "D"},
-			time.Date(2026, 11, 9, 9, 0, 0, 0, timeparse.NepalTZ)},
+			time.Date(2026, 11, 9, 9, 0, 0, 0, timeparse.AppTZ())},
 		{"offset plus clock applies clock", &nlu.EventIntent{Summary: "x", Amount: 1, Unit: "D", TimeOfDay: "9:30am"},
-			time.Date(2026, 9, 26, 9, 30, 0, 0, timeparse.NepalTZ)},
+			time.Date(2026, 9, 26, 9, 30, 0, 0, timeparse.AppTZ())},
 		{"passed time-of-day rolls to tomorrow", &nlu.EventIntent{Summary: "x", TimeOfDay: "5:30pm"},
-			time.Date(2026, 9, 26, 17, 30, 0, 0, timeparse.NepalTZ)},
+			time.Date(2026, 9, 26, 17, 30, 0, 0, timeparse.AppTZ())},
 	}
 	for _, c := range cases {
 		got, err := ComputeStartTime(c.intent, now)
@@ -40,7 +40,7 @@ func TestComputeStartTime(t *testing.T) {
 }
 
 func TestBuildEvent(t *testing.T) {
-	start := time.Date(2026, 9, 25, 9, 0, 0, 0, timeparse.NepalTZ)
+	start := time.Date(2026, 9, 25, 9, 0, 0, 0, timeparse.AppTZ())
 
 	monthly := &nlu.EventIntent{Summary: "pay rent", Recurring: true, Freq: "MONTHLY", Interval: 1}
 	if e := BuildEvent(monthly, start); e.Recurrence[0] != "RRULE:FREQ=MONTHLY;INTERVAL=1" {

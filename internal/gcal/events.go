@@ -96,7 +96,7 @@ func (s *Service) listUpcoming(ctx context.Context, opts ListOptions) ([]EventIt
 
 	var raw []*calendar.Event
 	var masters map[string]*calendar.Event
-	now := time.Now().In(timeparse.NepalTZ).Format(time.RFC3339)
+	now := time.Now().In(timeparse.AppTZ()).Format(time.RFC3339)
 	nowT := time.Now()
 	next := ""
 	count := 0
@@ -405,7 +405,7 @@ func eventStart(e *calendar.Event) (time.Time, string) {
 		if err != nil {
 			return time.Time{}, ""
 		}
-		return t.In(timeparse.NepalTZ), ""
+		return t.In(timeparse.AppTZ()), ""
 	}
 	return time.Time{}, e.Start.Date
 }
@@ -538,7 +538,7 @@ func (s *Service) BulkDeleteRecurring(ctx context.Context) ([]BulkDeleteItem, er
 // fetchUpcomingAll gathers upcoming instances across pages (up to maxPages).
 func (s *Service) fetchUpcomingAll(ctx context.Context) ([]*calendar.Event, error) {
 	var out []*calendar.Event
-	now := time.Now().In(timeparse.NepalTZ).Format(time.RFC3339)
+	now := time.Now().In(timeparse.AppTZ()).Format(time.RFC3339)
 	next := ""
 	for page := 0; page < maxPages; page++ {
 		req := s.Svc.Events.List(s.CalendarID).

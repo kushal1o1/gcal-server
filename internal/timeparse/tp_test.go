@@ -39,7 +39,7 @@ func TestParseTimeUnit(t *testing.T) {
 }
 
 func TestCalculateFutureDate(t *testing.T) {
-	base := time.Date(2025, 1, 1, 0, 0, 0, 0, NepalTZ)
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, AppTZ())
 
 	if got, _ := CalculateFutureDate(2, "D", base); got.Day() != 3 || got.Month() != 1 || got.Year() != 2025 {
 		t.Errorf("D case wrong: %v", got)
@@ -66,7 +66,7 @@ func TestCalculateFutureDate(t *testing.T) {
 }
 
 func TestCalculateFutureDateLeapYear(t *testing.T) {
-	base := time.Date(2024, 2, 29, 0, 0, 0, 0, NepalTZ)
+	base := time.Date(2024, 2, 29, 0, 0, 0, 0, AppTZ())
 	got, _ := CalculateFutureDate(1, "Y", base)
 	if got.Month() != 2 || got.Day() != 28 || got.Year() != 2025 {
 		t.Errorf("leap year Y case wrong: %v", got)
@@ -74,7 +74,7 @@ func TestCalculateFutureDateLeapYear(t *testing.T) {
 }
 
 func TestCalculateFutureDateMonthOverflow(t *testing.T) {
-	base := time.Date(2025, 1, 31, 0, 0, 0, 0, NepalTZ)
+	base := time.Date(2025, 1, 31, 0, 0, 0, 0, AppTZ())
 	got, _ := CalculateFutureDate(1, "M", base)
 	if got.Month() != 2 || got.Day() != 28 {
 		t.Errorf("month overflow case wrong: %v", got)
@@ -83,7 +83,7 @@ func TestCalculateFutureDateMonthOverflow(t *testing.T) {
 
 func TestParseTime(t *testing.T) {
 	cases := []struct {
-		in       string
+		in           string
 		wantH, wantM int
 	}{
 		{"14:30", 14, 30},

@@ -3,22 +3,22 @@ package nlu
 import (
 	"context"
 	"errors"
-	"fmt"
+	"time"
+
+	"github.com/kushal1o1/gcal-svr/internal/timing"
 )
 
-// Parse tries Gemini first and falls back to the deterministic parser when the
-// model is unavailable or rate-limited. Returns whether the fallback was used.
+// Parse turns a reminder phrase into an EventIntent using the deterministic
+// regex parser. The bool is kept for API compatibility and is always true:
+// the fallback parser is now the only parser.
 func Parse(ctx context.Context, text string) (*EventIntent, bool, error) {
-	intent, err := ParseGemini(ctx, text)
-	if err == nil {
-		return intent, false, nil
+	t := time.Now()
+	intent, err := ParseFallback(ctx, text)
+	timing.Since("nlu", t)
+	if err != nil {
+		return nil, true, err
 	}
-
-	fallbackIntent, fallbackErr := ParseFallback(ctx, text)
-	if fallbackErr != nil {
-		return nil, false, fmt.Errorf("nlu failed (gemini: %v; fallback: %v)", err, fallbackErr)
-	}
-	return fallbackIntent, true, nil
+	return intent, true, nil
 }
 
 // IsUnparseable reports whether an inner fallback error means the phrase had

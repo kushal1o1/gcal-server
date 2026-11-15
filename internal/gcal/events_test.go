@@ -84,7 +84,7 @@ func TestEventFromCalendar(t *testing.T) {
 	if !item.Critical || item.Recurring {
 		t.Errorf("critical flag = %v, recurring = %v", item.Critical, item.Recurring)
 	}
-	if !item.Start.Equal(time.Date(2026, 9, 26, 9, 0, 0, 0, timeparse.NepalTZ)) {
+	if !item.Start.Equal(time.Date(2026, 9, 26, 9, 0, 0, 0, timeparse.AppTZ())) {
 		t.Errorf("start = %v", item.Start)
 	}
 
