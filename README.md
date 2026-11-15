@@ -83,6 +83,21 @@ Local runs also auto-detect `./gcal-service-key.json`. The template is in
 
 Full endpoint reference: [docs/API.md](docs/API.md).
 
+## Event types
+
+An event can be critical, recurring, both, or neither.
+
+The phrase sets them when the event is created:
+
+| Type | Set by the phrase | Stored in Google as |
+|---|---|---|
+| Critical | `urgent`, `critical`, `important`, `asap`, `emergency`, `high priority`, or a capital `Remind` | 4 reminder overrides: `email 1440`, `popup 60`, `email 0`, `popup 0` |
+| Recurring | `every …`, `daily`, `weekly`, `monthly`, `yearly`, or `-A` | an RRULE on the event |
+| Normal | none of the above | 1 reminder override: `popup 0` |
+
+When events are read back, the server uses the same stored shape: more than one
+reminder override means critical, and a recurrence rule means recurring.
+
 
 ## Tests
 
