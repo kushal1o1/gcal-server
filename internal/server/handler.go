@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/kushal1o1/gcal-svr/internal/apiauth"
+	"github.com/kushal1o1/gcal-svr/internal/apperr"
 	"github.com/kushal1o1/gcal-svr/internal/gcal"
 	"github.com/kushal1o1/gcal-svr/internal/remind"
 	"github.com/kushal1o1/gcal-svr/internal/timing"
@@ -109,18 +111,14 @@ func handleRemind(w http.ResponseWriter, r *http.Request) {
 		svc, err = gcal.NewService(ctx)
 		timing.Since("gcal_service_init", t)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
+			writeError(w, r, err)
 			return
 		}
 	}
 
 	resp, err := remind.Run(ctx, &req, svc, time.Time{})
 	if err != nil {
-		if apiErr, ok := err.(*remind.Error); ok {
-			writeErr(w, apiErr.Status, apiErr.Message)
-			return
-		}
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeError(w, r, err)
 		return
 	}
 
@@ -183,7 +181,7 @@ func handleListEvents(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	svc, err := gcal.NewService(ctx)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeError(w, r, err)
 		return
 	}
 
@@ -197,7 +195,7 @@ func handleListEvents(w http.ResponseWriter, r *http.Request) {
 
 	events, hasMore, err := svc.ListEvents(ctx, opts)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error())
+		writeError(w, r, err)
 		return
 	}
 
@@ -272,7 +270,7 @@ func handleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	svc, err := gcal.NewService(ctx)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeError(w, r, err)
 		return
 	}
 
@@ -281,7 +279,7 @@ func handleDeleteEvent(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "event not found")
 			return
 		}
-		writeErr(w, http.StatusBadGateway, err.Error())
+		writeError(w, r, err)
 		return
 	}
 
@@ -319,7 +317,7 @@ func handleBulkDelete(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	svc, err := gcal.NewService(ctx)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeError(w, r, err)
 		return
 	}
 
@@ -335,7 +333,7 @@ func handleBulkDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error())
+		writeError(w, r, err)
 		return
 	}
 
@@ -401,7 +399,7 @@ func handleEditEvent(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	svc, err := gcal.NewService(ctx)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeError(w, r, err)
 		return
 	}
 
@@ -410,7 +408,7 @@ func handleEditEvent(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "event not found")
 			return
 		}
-		writeErr(w, http.StatusBadGateway, err.Error())
+		writeError(w, r, err)
 		return
 	}
 
@@ -434,6 +432,28 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 
 func writeOK(w http.ResponseWriter, status int, message string, data interface{}) {
 	writeJSON(w, status, map[string]interface{}{"success": true, "message": message, "data": data})
+}
+
+// writeError sends the client only the safe message and code from apperr, and
+// logs the real cause together with the request id so it can be found later.
+func writeError(w http.ResponseWriter, r *http.Request, err error) {
+	ae := apperr.From(err)
+	id := RequestID(r.Context())
+	if ae.Cause != nil {
+		level := slog.LevelInfo
+		if ae.Status >= 500 {
+			level = slog.LevelError
+		}
+		slog.Log(r.Context(), level, "request error",
+			"request_id", id, "status", ae.Status, "code", ae.Code, "cause", ae.Cause.Error())
+	}
+	writeJSON(w, ae.Status, map[string]any{
+		"success":    false,
+		"message":    ae.Message,
+		"code":       ae.Code,
+		"request_id": id,
+		"data":       nil,
+	})
 }
 
 func writeErr(w http.ResponseWriter, status int, message string) {

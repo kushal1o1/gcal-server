@@ -610,7 +610,10 @@ func (s *Service) bulkDelete(ctx context.Context, targets []deleteTarget) []Bulk
 	for _, t := range targets {
 		item := BulkDeleteItem{Summary: t.summary, Series: t.series}
 		if err := s.DeleteEvent(ctx, t.id); err != nil {
-			item.Err = err.Error()
+			// Per-item errors go back to the client, so keep Google's text out
+			// of the response; log it with the event id instead.
+			log.Printf("bulk delete failed id=%s: %v", t.id, err)
+			item.Err = "could not delete this event"
 		} else {
 			item.OK = true
 		}

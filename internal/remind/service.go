@@ -4,9 +4,11 @@ package remind
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/kushal1o1/gcal-svr/internal/apperr"
 	"github.com/kushal1o1/gcal-svr/internal/gcal"
 	"github.com/kushal1o1/gcal-svr/internal/nlu"
 	"github.com/kushal1o1/gcal-svr/internal/timeparse"
@@ -37,32 +39,24 @@ type Response struct {
 	Created     bool    `json:"created"`
 }
 
-// Error carries an HTTP-ish status so handlers can map failures cleanly.
-type Error struct {
-	Status  int
-	Message string
-}
-
-func (e *Error) Error() string { return e.Message }
-
 // Run executes the pipeline. Set now to time.Time{} to use the current moment.
 func Run(ctx context.Context, req *Request, svc *gcal.Service, now time.Time) (*Response, error) {
 	if req == nil || req.Text == "" {
-		return nil, &Error{Status: 400, Message: "text is required"}
+		return nil, apperr.BadRequest("text is required")
 	}
 
 	t := time.Now()
 	intent, err := nlu.Parse(ctx, req.Text)
 	timing.Since("nlu", t)
 	if err != nil {
-		return nil, &Error{Status: 422, Message: err.Error()}
+		return nil, apperr.Unprocessable(err.Error())
 	}
 
 	t = time.Now()
 	start, err := gcal.ComputeStartTime(intent, now)
 	timing.Since("compute_time", t)
 	if err != nil {
-		return nil, &Error{Status: 422, Message: err.Error()}
+		return nil, apperr.Unprocessable(err.Error())
 	}
 
 	resp := &Response{
@@ -80,14 +74,14 @@ func Run(ctx context.Context, req *Request, svc *gcal.Service, now time.Time) (*
 
 	if req.Create {
 		if svc == nil {
-			return nil, &Error{Status: 500, Message: "calendar service unavailable"}
+			return nil, apperr.Internal(errors.New("calendar service not configured"))
 		}
 		event := gcal.BuildEvent(intent, start)
 		t = time.Now()
 		id, err := svc.CreateEvent(ctx, event)
 		timing.Since("gcal_create", t)
 		if err != nil {
-			return nil, &Error{Status: 502, Message: fmt.Sprintf("calendar create failed: %v", err)}
+			return nil, apperr.From(fmt.Errorf("create reminder: %w", err))
 		}
 		resp.EventID = id
 		resp.Created = true
