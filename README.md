@@ -57,6 +57,22 @@ sequenceDiagram
 The server keeps no database and runs no scheduler. Google Calendar stores
 the events, fires the reminders, and sends the notifications.
 
+## What you can say
+
+People speak naturally, and the server reads the time, the repeat, the importance,
+and the reminder text from one sentence:
+
+```text
+remind me in 2 hours to leave
+remind me tomorrow at 9am to take meds
+remind me to pay rent every month
+remind me on friday to submit the report
+remind me every monday to take out the bins
+remind me to submit the tax form by tomorrow, it's urgent
+```
+
+See how server interprets : [docs/PHRASES.md](docs/PHRASES.md).
+
 ## Self-hosting
 
 This server writes to **one** Google Calendar, the one shared with its service
