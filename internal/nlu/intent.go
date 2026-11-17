@@ -20,6 +20,7 @@ type EventIntent struct {
 	Recurring bool    `json:"recurring"`             // CLI's -A flag
 	Freq      string  `json:"freq,omitempty"`        // DAILY WEEKLY MONTHLY YEARLY HOURLY MINUTELY ("" => none)
 	Interval  int     `json:"interval,omitempty"`    // repeat every N (1 when N not stated)
+	ByDay     string  `json:"by_day,omitempty"`      // weekday: MO TU WE TH FR SA SU ("" => none)
 }
 
 var unitToFreq = map[string]string{
@@ -61,6 +62,11 @@ func (e *EventIntent) Validate() error {
 		if _, _, err := timeparse.ParseTime(e.TimeOfDay); err != nil {
 			return fmt.Errorf("invalid time_of_day %q", e.TimeOfDay)
 		}
+	}
+	switch e.ByDay {
+	case "", "MO", "TU", "WE", "TH", "FR", "SA", "SU":
+	default:
+		return fmt.Errorf("invalid by_day %q", e.ByDay)
 	}
 	switch e.Freq {
 	case "", "DAILY", "WEEKLY", "MONTHLY", "YEARLY", "HOURLY", "MINUTELY":

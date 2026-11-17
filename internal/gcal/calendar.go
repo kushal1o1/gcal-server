@@ -9,9 +9,9 @@ import (
 	"os"
 	"strings"
 
+	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/option"
-	"golang.org/x/oauth2/google"
 )
 
 const scope = "https://www.googleapis.com/auth/calendar"

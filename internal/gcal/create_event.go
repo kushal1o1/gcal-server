@@ -22,6 +22,9 @@ func ComputeStartTime(intent *nlu.EventIntent, now time.Time) (time.Time, error)
 	if now.IsZero() {
 		now = time.Now().In(timeparse.AppTZ())
 	}
+	if intent.ByDay != "" && intent.Amount <= 0 {
+		return nextWeekday(intent, now)
+	}
 
 	var eventDT time.Time
 	if intent.Amount > 0 {
@@ -102,7 +105,11 @@ func BuildEvent(intent *nlu.EventIntent, start time.Time) *calendar.Event {
 		if interval < 1 {
 			interval = 1
 		}
-		event.Recurrence = []string{fmt.Sprintf("RRULE:FREQ=%s;INTERVAL=%d", freq, interval)}
+		rule := fmt.Sprintf("RRULE:FREQ=%s;INTERVAL=%d", freq, interval)
+		if intent.ByDay != "" {
+			rule += ";BYDAY=" + intent.ByDay
+		}
+		event.Recurrence = []string{rule}
 	}
 
 	return event
@@ -125,4 +132,34 @@ func (s *Service) CreateEvent(ctx context.Context, event *calendar.Event) (strin
 		return "", fmt.Errorf("create calendar event: %w", err)
 	}
 	return created.Id, nil
+}
+
+var byDayToWeekday = map[string]time.Weekday{
+	"MO": time.Monday, "TU": time.Tuesday, "WE": time.Wednesday, "TH": time.Thursday,
+	"FR": time.Friday, "SA": time.Saturday, "SU": time.Sunday,
+}
+
+// nextWeekday returns the next occurrence of intent.ByDay at the requested time
+// (9:00 AM when no time was given). A day that is today but already past rolls
+// to the following week.
+func nextWeekday(intent *nlu.EventIntent, now time.Time) (time.Time, error) {
+	target, ok := byDayToWeekday[intent.ByDay]
+	if !ok {
+		return time.Time{}, fmt.Errorf("unknown weekday %q", intent.ByDay)
+	}
+	hour, minute := 9, 0
+	if intent.TimeOfDay != "" {
+		h, m, err := timeparse.ParseTime(intent.TimeOfDay)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("bad time_of_day %q: %w", intent.TimeOfDay, err)
+		}
+		hour, minute = h, m
+	}
+	days := (int(target) - int(now.Weekday()) + 7) % 7
+	day := now.AddDate(0, 0, days)
+	start := time.Date(day.Year(), day.Month(), day.Day(), hour, minute, 0, 0, now.Location())
+	if !start.After(now) {
+		start = start.AddDate(0, 0, 7)
+	}
+	return start, nil
 }
