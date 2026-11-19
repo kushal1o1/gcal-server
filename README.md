@@ -80,20 +80,20 @@ account. Anyone who has the server URL and `API_TOKEN` can create and delete
 events on that calendar.
 
 - Run your own deployment with your own service account, calendar and token.
-- Do not share a deployment URL or token publicly.
+
 
 ## Config
 
 | Var | Purpose |
 |---|---|
 | `TIMEZONE` | IANA time zone for event times. Default `Asia/Kathmandu`. |
-| `GCAL_SERVICE_ACCOUNT_B64` | base64 of the service-account JSON (used on Vercel) |
+| `GCAL_SERVICE_ACCOUNT_B64` | base64 of the service-account JSON |
 | `GCAL_SERVICE_ACCOUNT_FILE` | path to key file (local alternative) |
 | `GCAL_CALENDAR_ID` | shared calendar id the service account writes to |
 | `API_TOKEN` | shared secret the app sends as a Bearer token |
 
 Local runs also auto-detect `./gcal-service-key.json`. The template is in
-`.env.example`. Never commit the raw service-account key or `.env`.
+`.env.example`.
 
 ## API
 

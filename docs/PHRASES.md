@@ -11,7 +11,7 @@ server looks for four things and treats everything else as the reminder itself:
 | **What** | everything left over, such as `pay rent` or `call mom` |
 
 Words are matched in any case. Filler such as "remind me to", "please",
-"bro", "this is", and "don't forget" is ignored.
+"bro :)", "this is", and "don't forget" is ignored.
 
 ## Timing
 
